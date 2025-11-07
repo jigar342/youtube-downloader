@@ -18,25 +18,19 @@ def index():
 
 @app.route('/api/info', methods=['POST'])
 def get_video_info():
-    """Video की info लाओ (सभी quality के साथ)"""
     data = request.json
     youtube_url = data.get('url', '').strip()
-    
     if not youtube_url:
         return jsonify({'success': False, 'message': 'URL खाली है'}), 400
-    
     try:
         command = [
             "yt-dlp",
             "-j",
             youtube_url
         ]
-        
         result = subprocess.run(command, capture_output=True, text=True, timeout=60)
-        
         if result.returncode == 0:
             video_data = json.loads(result.stdout)
-            
             formats = []
             if 'formats' in video_data:
                 for fmt in video_data['formats']:
@@ -49,7 +43,6 @@ def get_video_info():
                             'filesize': fmt.get('filesize', 0),
                             'ext': fmt.get('ext', 'Unknown')
                         })
-            
             return jsonify({
                 'success': True,
                 'title': video_data.get('title', 'Unknown'),
@@ -59,25 +52,17 @@ def get_video_info():
                 'formats': formats[:10]
             })
         else:
-            return jsonify({'success': False, 'message': 'Video info load नहीं हो सकी'}), 400
-    
+            return jsonify({'success': False, 'message': f'Video info failed.\nError: {result.stderr}'}), 400
     except Exception as e:
         return jsonify({'success': False, 'message': str(e)}), 500
 
 @app.route('/api/download', methods=['POST'])
 def download_video():
-    """
-    Video को selected quality में download करो
-    और response में direct download URL return करो
-    """
     data = request.json
     youtube_url = data.get('url', '').strip()
     format_id = data.get('format_id', 'best')
-    
     if not youtube_url:
         return jsonify({'success': False, 'message': 'URL खाली है'}), 400
-    
-    # Unique ID हर download के लिए
     download_id = str(uuid.uuid4())
     download_path = os.path.join(DOWNLOAD_FOLDER, download_id)
     os.makedirs(download_path, exist_ok=True)
@@ -99,7 +84,7 @@ def download_video():
             filename = files[0]
             file_path = os.path.join(download_path, filename)
             file_size = os.path.getsize(file_path) / (1024 * 1024)
-            download_url = f"https://web-production-590ce.up.railway.app/api/download/{download_id}/{filename}"  # apna backend URL डालना
+            download_url = f"https://web-production-590ce.up.railway.app/api/download/{download_id}/{filename}"
             return jsonify({
                 'success': True,
                 'download_id': download_id,
@@ -107,8 +92,11 @@ def download_video():
                 'size_mb': round(file_size, 2),
                 'download_url': download_url
             })
+    else:
+        # DEBUG: अब error message मिलेगा!
+        return jsonify({'success': False, 'message': f'Download failed. Error: {result.stderr}'})
 
-    return jsonify({'success': False, 'message': 'Download failed'})
+    return jsonify({'success': False, 'message': 'Download failed/unknown error'})
 
 @app.route('/api/status/<download_id>')
 def check_status(download_id):
