@@ -3,19 +3,14 @@ from flask_cors import CORS
 import subprocess
 import os
 import uuid
-import threading
 from pathlib import Path
 import json
-import time
 
 app = Flask(__name__)
 CORS(app)
 
 DOWNLOAD_FOLDER = "downloads"
 Path(DOWNLOAD_FOLDER).mkdir(exist_ok=True)
-
-# TOR proxy (IP rotation के लिए)
-TOR_PROXY = "socks5://127.0.0.1:9050"
 
 @app.route('/')
 def index():
@@ -31,21 +26,18 @@ def get_video_info():
         return jsonify({'success': False, 'message': 'URL खाली है'}), 400
     
     try:
-        # yt-dlp से video info निकालो
         command = [
             "yt-dlp",
             "-j",
             youtube_url
         ]
         
-        result = subprocess.run(command, capture_output=True, text=True, timeout=30)
+        result = subprocess.run(command, capture_output=True, text=True, timeout=60)
         
         if result.returncode == 0:
             video_data = json.loads(result.stdout)
             
-            # सभी formats filter करो
             formats = []
-            
             if 'formats' in video_data:
                 for fmt in video_data['formats']:
                     if fmt.get('vcodec') != 'none' and fmt.get('acodec') != 'none':
@@ -74,7 +66,10 @@ def get_video_info():
 
 @app.route('/api/download', methods=['POST'])
 def download_video():
-    """Video को selected quality में download करो"""
+    """
+    Video को selected quality में download करो
+    और response में direct download URL return करो
+    """
     data = request.json
     youtube_url = data.get('url', '').strip()
     format_id = data.get('format_id', 'best')
@@ -86,79 +81,57 @@ def download_video():
     download_id = str(uuid.uuid4())
     download_path = os.path.join(DOWNLOAD_FOLDER, download_id)
     os.makedirs(download_path, exist_ok=True)
-    
-    def download_in_background():
-        """Background में download करो"""
-        try:
-            output_template = os.path.join(download_path, "%(title)s.%(ext)s")
-            
-            command = [
-                "yt-dlp",
-                "-f", f"{format_id}+bestaudio/best",
-                "-o", output_template,
-                "--socket-timeout", "30",
-                "--retries", "3",
-                youtube_url
-            ]
-            
-            result = subprocess.run(command, capture_output=True, text=True, timeout=600)
-            
-            if result.returncode == 0:
-                files = os.listdir(download_path)
-                if files:
-                    filename = files[0]
-                    file_path = os.path.join(download_path, filename)
-                    file_size = os.path.getsize(file_path) / (1024 * 1024)
-                    
-                    with open(os.path.join(download_path, 'info.txt'), 'w') as f:
-                        f.write(f"filename:{filename}\n")
-                        f.write(f"size:{file_size:.2f}\n")
-                        f.write(f"status:success\n")
-            else:
-                with open(os.path.join(download_path, 'info.txt'), 'w') as f:
-                    f.write(f"status:error\n")
-                    f.write(f"message:Download failed\n")
-        except Exception as e:
-            with open(os.path.join(download_path, 'info.txt'), 'w') as f:
-                f.write(f"status:error\n")
-                f.write(f"message:{str(e)}\n")
-    
-    thread = threading.Thread(target=download_in_background)
-    thread.daemon = True
-    thread.start()
-    
-    return jsonify({'success': True, 'download_id': download_id})
+
+    output_template = os.path.join(download_path, "%(title)s.%(ext)s")
+    command = [
+        "yt-dlp",
+        "-f", f"{format_id}+bestaudio/best",
+        "-o", output_template,
+        "--socket-timeout", "30",
+        "--retries", "3",
+        youtube_url
+    ]
+    result = subprocess.run(command, capture_output=True, text=True, timeout=600)
+
+    if result.returncode == 0:
+        files = os.listdir(download_path)
+        if files:
+            filename = files[0]
+            file_path = os.path.join(download_path, filename)
+            file_size = os.path.getsize(file_path) / (1024 * 1024)
+            download_url = f"https://web-production-590ce.up.railway.app/api/download/{download_id}/{filename}"  # apna backend URL डालना
+            return jsonify({
+                'success': True,
+                'download_id': download_id,
+                'filename': filename,
+                'size_mb': round(file_size, 2),
+                'download_url': download_url
+            })
+
+    return jsonify({'success': False, 'message': 'Download failed'})
 
 @app.route('/api/status/<download_id>')
 def check_status(download_id):
-    """Download की status check करो"""
     info_file = os.path.join(DOWNLOAD_FOLDER, download_id, 'info.txt')
-    
     if not os.path.exists(info_file):
         return jsonify({'status': 'processing'})
-    
     try:
         with open(info_file, 'r') as f:
             lines = f.readlines()
-        
         info = {}
         for line in lines:
             if ':' in line:
                 key, value = line.split(':', 1)
                 info[key.strip()] = value.strip()
-        
         return jsonify(info)
     except:
         return jsonify({'status': 'error'})
 
 @app.route('/api/download/<download_id>/<filename>')
 def get_download(download_id, filename):
-    """File download करो"""
     file_path = os.path.join(DOWNLOAD_FOLDER, download_id, filename)
-    
     if os.path.exists(file_path):
         return send_file(file_path, as_attachment=True)
-    
     return jsonify({'error': 'File not found'}), 404
 
 if __name__ == '__main__':
